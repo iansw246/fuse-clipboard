@@ -9,7 +9,9 @@
 #include <thread>
 #include <future>
 #include <string>
-#include <utility>
+#include <utility> // std::piecewise_construct, std::forward_as_tuple
+#include <mutex> // std::lock_guard
+#include <chrono> // std::chrono::milliseconds
 
 #include "fuse.hpp"
 
@@ -81,6 +83,14 @@ int main(int argc, char* argv[])
     // Set initial clipboard data
     onClipboardChanged();
 
+    // Check early in case fuse exits early (for incorrect option or another reason)
+    // If fuse exits very quickly and calls QGuiApplication::quit(), maybe before app.exec() runs, the program never exits (not sure what circumstnaces causes the issues)
+    // This is an attempt to return if Fuse exits early and never run app.exec()
+    std::chrono::milliseconds waitSpan(50);
+    if (future.wait_for(waitSpan) == std::future_status::ready)
+    {
+        return future.get();
+    }
     app.exec();
 
     return future.get();

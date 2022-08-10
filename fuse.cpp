@@ -38,6 +38,7 @@ struct FusePrivateData
 // Right now, uses QT to convert to these image formats
 constexpr std::array<ImageFormat, 3> SUPPORTED_IMAGE_FORMATS {{ {"BMP", "bmp"}, {"JPG", "jpg"}, {"PNG", "png"} }};
 
+constexpr std::string_view CLIPBOARD_BASE_PATH("/clipboard");
 constexpr std::string_view IMAGE_FILENAME = "image";
 constexpr std::string_view CLIPBOARD_IMAGE_BASE_PATH("/clipboard/image.");
 
@@ -49,6 +50,7 @@ std::mutex clipboardMutex;
 
 std::mutex clipboardDataMapMutex;
 std::unordered_map<std::string, std::vector<uint8_t>> clipboardDataMap;
+// List of mime type prefixes (image, text, application, etc.)
 std::unordered_set<std::string> clipboardMimeDirs;
 
 FusePrivateData* getPrivateData()
@@ -63,76 +65,46 @@ void* init(fuse_conn_info* conn, fuse_config* config)
 
 int getAttr(const char* path, struct stat* stbuf, fuse_file_info* fi)
 {
-    std::lock_guard lock(clipboardMutex);
-    const QClipboard* clipboard = QGuiApplication::clipboard();
-    const QMimeData* clipboardMimeData = clipboard->mimeData();
-    {
-        const QStringList formats = clipboardMimeData->formats();
-        qDebug() << "Supported formats: ";
-        for (auto it = formats.constBegin(); it != formats.constEnd(); ++it)
-        {
-            qDebug() << (*it).toLocal8Bit().constData();
-        }
-    }
+    std::lock_guard lock(clipboardDataMapMutex);
     if (strcmp(path, "/") == 0)
     {
         stbuf->st_mode = S_IFDIR | 0755;
-        // Subdirectory /clipboard/
+        // 1 subdir, /clipboard/
         stbuf->st_nlink = 3;
+        return 0;
     }
-    else if (strcmp(path, "/clipboard") == 0)
+    else if (strcmp(path, CLIPBOARD_BASE_PATH.data()) == 0)
     {
         stbuf->st_mode = S_IFDIR | 0755;
-        stbuf->st_nlink = 2;
+        stbuf->st_nlink = 2 + clipboardMimeDirs.size();
+        return 0;
     }
-    // If path starts with the image base path
-    else if (clipboardMimeData->hasImage() && strncmp(path, CLIPBOARD_IMAGE_BASE_PATH.data(), CLIPBOARD_IMAGE_BASE_PATH.size()) == 0)
+    // path starts with /clipboard
+    else if (strncmp(path, CLIPBOARD_BASE_PATH.data(), CLIPBOARD_BASE_PATH.size()) == 0)
     {
-        if (strcmp(path + CLIPBOARD_IMAGE_BASE_PATH.size(), "png") == 0 && clipboardMimeData->hasFormat("image/png"))
+        // Check if path is a mime dir
+        // skip leading /clipboard/
+        if (clipboardMimeDirs.find(path + CLIPBOARD_BASE_PATH.size() + 1) != clipboardMimeDirs.cend())
         {
-            stbuf->st_mode = S_IFREG | 0444;
-            stbuf->st_nlink = 1;
-            stbuf->st_size = clipboardMimeData->data("image/png").size();
+            stbuf->st_mode = S_IFDIR | 0755;
+            stbuf->st_nlink = 2;
             return 0;
         }
-        else if (strcmp(path + CLIPBOARD_IMAGE_BASE_PATH.size(), "jpg") == 0 && clipboardMimeData->hasFormat("image/jpeg"))
+        else
         {
-            stbuf->st_mode = S_IFREG | 0444;
-            stbuf->st_nlink = 1;
-            stbuf->st_size = clipboardMimeData->data("image/jpeg").size();
-            return 0;
-        }
-        else if (strcmp(path + CLIPBOARD_IMAGE_BASE_PATH.size(), "bmp") == 0 && clipboardMimeData->hasFormat("image/bmp"))
-        {
-            stbuf->st_mode = S_IFREG | 0444;
-            stbuf->st_nlink = 1;
-            stbuf->st_size = clipboardMimeData->data("image/bmp").size();
-            return 0;
-        }
-        /*
-        for (const ImageFormat& imageFormat : SUPPORTED_IMAGE_FORMATS)
-        {
-            const char* extension = path + CLIPBOARD_IMAGE_BASE_PATH.size();
-            if (strcmp(extension, imageFormat.fileExtension) == 0)
+            // Check if file, skipping "/clipboard/", matches a mimetype we have data for
+            auto it = clipboardDataMap.find(path + CLIPBOARD_BASE_PATH.size() + 1);
+            if (it != clipboardDataMap.cend())
             {
                 stbuf->st_mode = S_IFREG | 0444;
                 stbuf->st_nlink = 1;
-
-                QBuffer buffer;
-                const QImage image = clipboard->image(QClipboard::Mode::Clipboard);
-                buffer.open(QIODevice::WriteOnly);
-                image.save(&buffer, imageFormat.format);
-                stbuf->st_size = buffer.buffer().size();
+                stbuf->st_size = (*it).second.size();
                 return 0;
             }
         }
-        */
     }
-    else
-    {
-        return -ENOENT;
-    }
-    return 0;
+
+    return -ENOENT;
 }
 
 int readDir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, fuse_file_info* fi,
@@ -146,26 +118,39 @@ int readDir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, f
         filler(buf, "clipboard", NULL, 0, FUSE_FILL_DIR_NO_FLAG);
         return 0;
     }
-    else if (strcmp(path, "/clipboard/"))
+    else if (strcmp(path, "/clipboard") == 0)
     {
         std::lock_guard lock(clipboardDataMapMutex);
         for (const std::string& folder : clipboardMimeDirs)
         {
             filler(buf, folder.c_str(), NULL, 0, FUSE_FILL_DIR_NO_FLAG);
         }
-        /*std::lock_guard lock(clipboardMutex);
-        const QMimeData* mimeData = QGuiApplication::clipboard()->mimeData();
-        if (mimeData->hasImage())
-        {
-            for (const ImageFormat& imageFormat : SUPPORTED_IMAGE_FORMATS)
-            {
-                // Add image files with extension to directory list
-                // For example, image.png, image.jpg, image.bmp
-                std::string filename = std::string(IMAGE_FILENAME) + "." + imageFormat.fileExtension;
-                filler(buf, filename.c_str(), NULL, 0, fuse_fill_dir_flags::FUSE_FILL_DIR_PLUS);
-            }
-        }*/
         return 0;
+    }
+    else if (strncmp(path, CLIPBOARD_BASE_PATH.data(), CLIPBOARD_BASE_PATH.size()) == 0)
+    {
+        std::lock_guard lock(clipboardDataMapMutex);
+        for (const std::string& dir : clipboardMimeDirs)
+        {
+            // Skip leading /clipboard/
+            // +1 to skip last /
+            if ((path + CLIPBOARD_BASE_PATH.size() + 1) == dir)
+            {
+                for (const auto& mimePair : clipboardDataMap)
+                {
+                    // Check if mime type starts the name of the directory
+                    // for example, if "image/png" starts with "image"
+                    if (mimePair.first.rfind(dir, 0) != std::string::npos)
+                    {
+                        // Add listing for file with text after first slash
+                        // If mimePair.second == "image/png", then add "png"
+                        // +1 to skip slash
+                        filler(buf, mimePair.first.c_str() + dir.size() + 1, NULL, 0, FUSE_FILL_DIR_NO_FLAG);
+                    }
+                }
+                return 0;
+            }
+        }
     }
     return -ENOENT;
 }
@@ -176,22 +161,13 @@ int open(const char* path, fuse_file_info* fi)
     {
         return -EACCES;
     }
-    // Path without extension is an image
-    if (strncmp(path, CLIPBOARD_IMAGE_BASE_PATH.data(), CLIPBOARD_IMAGE_BASE_PATH.size()) == 0)
+    if (strncmp(path, CLIPBOARD_BASE_PATH.data(), CLIPBOARD_BASE_PATH.size()) == 0)
     {
-        std::lock_guard lock(clipboardMutex);
-        const QClipboard* clipboard = QGuiApplication::clipboard();
-        const QMimeData* mimeData = clipboard->mimeData();
-        if (mimeData->hasImage())
+        std::lock_guard lock(clipboardDataMapMutex);
+        auto it = clipboardDataMap.find(path + CLIPBOARD_BASE_PATH.size() + 1);
+        if (it != clipboardDataMap.cend())
         {
-            for (const ImageFormat& format : SUPPORTED_IMAGE_FORMATS)
-            {
-                if (strcmp(path + CLIPBOARD_IMAGE_BASE_PATH.size(), format.fileExtension) == 0)
-                {
-                    return 0;
-                }
-            }
-
+            return 0;
         }
     }
     return -ENOENT;
@@ -199,36 +175,19 @@ int open(const char* path, fuse_file_info* fi)
 
 int read(const char* path, char* buf, size_t size, off_t offset, fuse_file_info* fi)
 {
-    if (strncmp(path, CLIPBOARD_IMAGE_BASE_PATH.data(), CLIPBOARD_IMAGE_BASE_PATH.size()) == 0)
+    if (strncmp(path, CLIPBOARD_BASE_PATH.data(), CLIPBOARD_BASE_PATH.size()) == 0)
     {
-        std::lock_guard lock(clipboardMutex);
-        const QClipboard* clipboard = QGuiApplication::clipboard();
-        const QMimeData* mimeData = clipboard->mimeData();
-        if (mimeData->hasImage())
+        std::lock_guard lock(clipboardDataMapMutex);
+        auto it = clipboardDataMap.find(path + CLIPBOARD_BASE_PATH.size() + 1);
+        if (it != clipboardDataMap.cend())
         {
-            for (const ImageFormat& format : SUPPORTED_IMAGE_FORMATS)
+            const std::vector<uint8_t>& data = (*it).second;
+            if (size + offset >= data.size())
             {
-                if (strcmp(path + CLIPBOARD_IMAGE_BASE_PATH.size(), format.fileExtension) == 0)
-                {
-                    const QImage image = clipboard->image();
-                    QBuffer buffer;
-                    buffer.open(QIODevice::WriteOnly);
-                    image.save(&buffer, format.format);
-                    buffer.close();
-                    const QByteArray& imageData = buffer.data();
-                    if (offset >= imageData.size())
-                    {
-                        return 0;
-                    }
-                    if (offset + size > imageData.size())
-                    {
-                        size = imageData.size() - offset;
-                    }
-                    auto start = imageData.cbegin() + offset;
-                    std::copy_n(start, size, buf);
-                    return size;
-                }
+                size = data.size() - offset;
             }
+            std::copy_n(data.begin() + offset, size, buf);
+            return size;
         }
     }
     return -ENOENT;
