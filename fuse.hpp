@@ -22,5 +22,5 @@ int read(const char* path, char* buf, size_t size, off_t offset, fuse_file_info*
 int readDir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, fuse_file_info* fi,
             fuse_readdir_flags flags);
 void destroy(void* privateData);
-const fuse_operations operations = {.getattr = getAttr, .open = open, .read = read, .readdir = readDir, .init = init, .destroy = destroy};
+const fuse_operations operations = {.getattr = getAttr, .open = open, .read = read, .readdir = readDir, .init = init};
 }
