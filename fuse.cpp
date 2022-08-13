@@ -1,11 +1,4 @@
-#include <cstring>
-#include <errno.h>
-#include <array>
-#include <string_view>
-#include <mutex>
-#include <algorithm>
-#include <unordered_set>
-#include <unordered_map>
+#include "fuse.hpp"
 
 #include <QGuiApplication>
 #include <QClipboard>
@@ -18,10 +11,16 @@
 #include <QByteArray>
 #include <QDebug>
 
-#include "fuse.hpp"
+#include <cstring>
+#include <errno.h>
+#include <array>
+#include <string_view>
+#include <mutex>
+#include <algorithm>
+#include <unordered_set>
+#include <unordered_map>
 
-namespace FuseImplementation
-{
+using namespace FuseImplementation;
 
 struct ImageFormat
 {
@@ -48,10 +47,10 @@ constexpr fuse_fill_dir_flags FUSE_FILL_DIR_NO_FLAG = static_cast<fuse_fill_dir_
 
 std::mutex clipboardMutex;
 
-std::mutex clipboardDataMapMutex;
-std::unordered_map<std::string, std::vector<uint8_t>> clipboardDataMap;
+std::mutex FuseImplementation::clipboardDataMapMutex;
+std::unordered_map<std::string, std::vector<uint8_t>> FuseImplementation::clipboardDataMap;
 // List of mime type prefixes (image, text, application, etc.)
-std::unordered_set<std::string> clipboardMimeDirs;
+std::unordered_set<std::string> FuseImplementation::clipboardMimeDirs;
 
 FusePrivateData* getPrivateData()
 {
@@ -193,10 +192,4 @@ int read(const char* path, char* buf, size_t size, off_t offset, fuse_file_info*
     return -ENOENT;
 }
 
-void destroy(void* privateData)
-{
-//    fuse_context* context = fuse_get_context();
-//    delete reinterpret_cast<FusePrivateData*>(context->private_data);
-}
-
-} // namespace FuseImplementation
+const fuse_operations FuseImplementation::operations = {.getattr = getAttr, .open = open, .read = read, .readdir = readDir, .init = init};
