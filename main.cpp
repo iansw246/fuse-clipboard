@@ -1,19 +1,17 @@
+#include "fuse.hpp"
+
 #include <QGuiApplication>
 #include <QDebug>
 #include <QClipboard>
 #include <QMimeData>
 #include <QString>
 
-#define FUSE_USE_VERSION 31
-#include <fuse.h>
 #include <thread>
 #include <future>
 #include <string>
 #include <utility> // std::piecewise_construct, std::forward_as_tuple
 #include <mutex> // std::lock_guard
 #include <chrono> // std::chrono::milliseconds
-
-#include "fuse.hpp"
 
 void onClipboardChanged()
 {
