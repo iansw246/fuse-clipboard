@@ -56,11 +56,13 @@ int fuseMainThread(int argc, char* argv[], const fuse_operations* op, void* priv
     {
         return 1;
     }
+    // Force foreground so main thread doesn't exit, destroying the QApplication object
+    fuse_opt_add_arg(&args, "-f");
 
     //int ret = fuse_main(args.argc, args.argv, &FuseImplementation::operations, NULL);
     int ret = fuse_main(args.argc, args.argv, op, privateData);
-    // Quit() is threadsafe, but exit() is not
     fuse_opt_free_args(&args);
+    // Quit() is threadsafe, but exit() is not
     QGuiApplication::quit();
     return ret;
 }

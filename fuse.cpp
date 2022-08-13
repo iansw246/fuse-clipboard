@@ -143,6 +143,7 @@ int readDir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, f
                     {
                         // Add listing for file with text after first slash
                         // If mimePair.second == "image/png", then add "png"
+                        // to directory listing
                         // +1 to skip slash
                         filler(buf, mimePair.first.c_str() + dir.size() + 1, NULL, 0, FUSE_FILL_DIR_NO_FLAG);
                     }
