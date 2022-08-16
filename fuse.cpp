@@ -18,8 +18,7 @@ using namespace FuseImplementation;
 */
 
 // Fuse private data is same as init data, for now
-struct FusePrivateData : FuseInitData
-{};
+using FusePrivateData = FuseInitData;
 
 // Should use std::string but it's not constexpr yet (as of C++17) and this is an unnecessary optimization I want to make
 constexpr std::string_view CLIPBOARD_BASE_PATH("/clipboard");
