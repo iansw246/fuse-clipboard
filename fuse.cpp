@@ -28,16 +28,9 @@ using namespace FuseImplementation;
  * GTK or raw X11 or other mechanism for clipboard access so QT is not required
 */
 
-struct ImageFormat
-{
-    const char* format;
-    const char* fileExtension;
-};
-struct FusePrivateData
-{
-    const QClipboard* clipboard;
-    std::mutex clipboardMutex;
-};
+// Fuse private data is same as init data, for now
+struct FusePrivateData : FuseInitData
+{};
 
 // Should use std::string but it's not constexpr yet (as of C++17) and this is an unnecessary optimization I want to make
 constexpr std::string_view CLIPBOARD_BASE_PATH("/clipboard");
@@ -50,21 +43,19 @@ constexpr std::string_view BASE_FILE_NAME("file");
 // This is undefined because there isn't an enum for 0, but it should be ok.
 constexpr fuse_fill_dir_flags FUSE_FILL_DIR_NO_FLAG = static_cast<fuse_fill_dir_flags>(0);
 
-std::mutex clipboardMutex;
-
-std::mutex FuseImplementation::clipboardDataMapMutex;
-std::unordered_map<std::string, std::vector<uint8_t>> FuseImplementation::clipboardDataMap;
-// List of mime type prefixes (image, text, application, etc.)
-std::unordered_set<std::string> FuseImplementation::clipboardMimeDirs;
-
 FusePrivateData* getPrivateData()
 {
-    return reinterpret_cast<FusePrivateData*>(fuse_get_context()->private_data);
+    auto* privateData = reinterpret_cast<FusePrivateData*>(fuse_get_context()->private_data);
+    return privateData;
+}
+ClipboardData* getClipboardData()
+{
+    return getPrivateData()->clipboardData;
 }
 
 // Removes leading part of mime type, returns name of file as {BASE_FILE_NAME}.{mimetype}
 // If mimetype is "image/png" and BASE_FILE_NAME="file", file name returned is "file.png"
-std::string mimeTypeToFileName(const std::string& mimeType)
+std::string fullMimeTypeToFileName(const std::string& mimeType)
 {
     auto slashIndex = mimeType.find('/');
     // Maybe reserve space to increase performance
@@ -74,7 +65,7 @@ std::string mimeTypeToFileName(const std::string& mimeType)
 
 // Given file path in form of "{mimetype prefix}/{name}.{mimetype}", returns full mimetype, {mimetype prefix}/{mimetype}
 // For example, if base file name is "basefile", then "image/basefile.png" returns "image/png"
-std::string filePathToMimeType(const std::string& filePath)
+std::string filePathToFullMimeType(const std::string& filePath)
 {
     auto baseFileNameIndex = filePath.find(BASE_FILE_NAME.data());
     if (baseFileNameIndex == std::string::npos)
@@ -93,12 +84,13 @@ std::string filePathToMimeType(const std::string& filePath)
 
 void* init(fuse_conn_info* conn, fuse_config* config)
 {
-    return nullptr;
+    qDebug() << "Private data pointer: " << fuse_get_context()->private_data << '\n';
+    // Since init data is same as private data, no need to change anything
+    return fuse_get_context()->private_data;
 }
 
 int getAttr(const char* path, struct stat* stbuf, fuse_file_info* fi)
 {
-    std::lock_guard lock(clipboardDataMapMutex);
     if (strcmp(path, "/") == 0)
     {
         stbuf->st_mode = S_IFDIR | 0755;
@@ -108,37 +100,42 @@ int getAttr(const char* path, struct stat* stbuf, fuse_file_info* fi)
     }
     else if (strcmp(path, CLIPBOARD_BASE_PATH.data()) == 0)
     {
+        ClipboardData* clipboardData = getClipboardData();
+        auto lock = clipboardData->getLock();
         stbuf->st_mode = S_IFDIR | 0755;
-        stbuf->st_nlink = 2 + clipboardMimeDirs.size();
+        stbuf->st_nlink = 2 + clipboardData->mainMimeTypesCount();
         return 0;
     }
     // path starts with /clipboard
     else if (strncmp(path, CLIPBOARD_BASE_PATH.data(), CLIPBOARD_BASE_PATH.size()) == 0)
     {
         // Check if path is a mime dir
+
         // skip leading /clipboard/
         std::string pathWithoutClipboardType(path + CLIPBOARD_BASE_PATH.size() + 1);
 
-        // Check for mime type prefix directory
+        ClipboardData* clipboardData = getClipboardData();
+        auto lock = clipboardData->getLock();
+
+        // Check for main mime type directory
         // If pathWithoutClipboardType is a mimeprefix, like "image" or "text"
-        if (clipboardMimeDirs.find(path + CLIPBOARD_BASE_PATH.size() + 1) != clipboardMimeDirs.cend())
+        if (clipboardData->hasMainMimeType(pathWithoutClipboardType))
         {
             stbuf->st_mode = S_IFDIR | 0755;
-            stbuf->st_nlink = 2;
+            // pathWIthoutClipboard has been verified to be a main MIME type
+            stbuf->st_nlink = 2 + clipboardData->mimeSubTypesCount(pathWithoutClipboardType);
             return 0;
         }
-        else
+
+        // Check if file, skipping "/clipboard/", matches a full mimetype we have data for
+        std::string possibleFullMimeType = filePathToFullMimeType(pathWithoutClipboardType);
+        std::optional<size_t> dataSize = clipboardData->dataSize(possibleFullMimeType);
+        if (dataSize)
         {
-            // Check if file, skipping "/clipboard/", matches a mimetype we have data for
-            std::string mimeType = filePathToMimeType(pathWithoutClipboardType);
-            auto it = clipboardDataMap.find(mimeType);
-            if (it != clipboardDataMap.cend())
-            {
-                stbuf->st_mode = S_IFREG | 0444;
-                stbuf->st_nlink = 1;
-                stbuf->st_size = (*it).second.size();
-                return 0;
-            }
+            stbuf->st_mode = S_IFREG | 0444;
+            stbuf->st_nlink = 1;
+            stbuf->st_size = *dataSize;
+            return 0;
         }
     }
 
@@ -158,40 +155,38 @@ int readDir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, f
     }
     else if (strcmp(path, "/clipboard") == 0)
     {
-        std::lock_guard lock(clipboardDataMapMutex);
-        for (const std::string& folder : clipboardMimeDirs)
+        ClipboardData* clipboardData = getClipboardData();
+        auto lock = clipboardData->getLock();
+        const auto mainMimeTypes = clipboardData->mainMimeTypes();
+        for (const std::string& mainMimeType : mainMimeTypes)
         {
-            filler(buf, folder.c_str(), NULL, 0, FUSE_FILL_DIR_NO_FLAG);
+            filler(buf, mainMimeType.c_str(), NULL, 0, FUSE_FILL_DIR_NO_FLAG);
         }
         return 0;
     }
+    // If path start swith clipboard base path
     else if (strncmp(path, CLIPBOARD_BASE_PATH.data(), CLIPBOARD_BASE_PATH.size()) == 0)
     {
-        std::lock_guard lock(clipboardDataMapMutex);
-        for (const std::string& dir : clipboardMimeDirs)
+        ClipboardData* clipboardData = getClipboardData();
+        auto lock = clipboardData->getLock();
+        // Skip leading /clipboard/
+        // +1 to skip last /
+        // If path ends with main mime type, add subtypes to directory listing
+        const auto subTypes = clipboardData->mimeSubTypes(path + CLIPBOARD_BASE_PATH.size() + 1);
+        if (subTypes.empty())
         {
-            // Skip leading /clipboard/
-            // +1 to skip last /
-            if ((path + CLIPBOARD_BASE_PATH.size() + 1) == dir)
-            {
-                for (const auto& mimePair : clipboardDataMap)
-                {
-                    // Check if mime type starts the name of the directory
-                    // for example, if "image/png" starts with "image"
-                    if (mimePair.first.rfind(dir, 0) != std::string::npos)
-                    {
-                        // Add listing for file with text after first slash
-                        // If mimePair.second == "image/png", then add "file.png" to directory listing
-                        // where file is the file base name constant
-
-                        // +1 to skip slash
-                        std::string filename = mimeTypeToFileName(mimePair.first);
-                        filler(buf, filename.c_str(), NULL, 0, FUSE_FILL_DIR_NO_FLAG);
-                    }
-                }
-                return 0;
-            }
+            return -ENOENT;
         }
+        std::string filename(BASE_FILE_NAME.data());
+        filename += ".";
+        auto extensionIndex = filename.size();
+        for (const std::string& subType : subTypes)
+        {
+            // Replace old extension with new extension
+            filename.replace(extensionIndex, std::string::npos, subType);
+            filler(buf, filename.c_str(), NULL, 0, FUSE_FILL_DIR_NO_FLAG);
+        }
+        return 0;
     }
     return -ENOENT;
 }
@@ -204,10 +199,9 @@ int open(const char* path, fuse_file_info* fi)
     }
     if (strncmp(path, CLIPBOARD_BASE_PATH.data(), CLIPBOARD_BASE_PATH.size()) == 0)
     {
-        std::lock_guard lock(clipboardDataMapMutex);
-        std::string mimeType = filePathToMimeType(path + CLIPBOARD_BASE_PATH.size() + 1);
-        auto it = clipboardDataMap.find(mimeType);
-        if (it != clipboardDataMap.cend())
+        ClipboardData* clipboardData = getClipboardData();
+        auto lock = clipboardData->getLock();
+        if (clipboardData->hasFullMimeType(filePathToFullMimeType(path + CLIPBOARD_BASE_PATH.size() + 1)))
         {
             return 0;
         }
@@ -219,16 +213,16 @@ int read(const char* path, char* buf, size_t size, off_t offset, fuse_file_info*
 {
     if (strncmp(path, CLIPBOARD_BASE_PATH.data(), CLIPBOARD_BASE_PATH.size()) == 0)
     {
-        std::lock_guard lock(clipboardDataMapMutex);
-        auto it = clipboardDataMap.find(filePathToMimeType(path + CLIPBOARD_BASE_PATH.size() + 1));
-        if (it != clipboardDataMap.cend())
+        ClipboardData* clipboardData = getClipboardData();
+        auto lock = clipboardData->getLock();
+        const std::optional<const std::vector<uint8_t>> data = clipboardData->mimeData(filePathToFullMimeType(path + CLIPBOARD_BASE_PATH.size() + 1));
+        if (data)
         {
-            const std::vector<uint8_t>& data = (*it).second;
-            if (size + offset >= data.size())
+            if (size + offset >= data->size())
             {
-                size = data.size() - offset;
+                size = data->size() - offset;
             }
-            std::copy_n(data.begin() + offset, size, buf);
+            std::copy_n(data->begin() + offset, size, buf);
             return size;
         }
     }

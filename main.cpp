@@ -1,25 +1,28 @@
 #include "fuse.hpp"
-
-#include <QGuiApplication>
-#include <QDebug>
-#include <QClipboard>
-#include <QMimeData>
-#include <QString>
+#include "clipboardData.hpp"
+#include "qtClipboardData.hpp"
 
 #include <thread>
 #include <future>
 #include <string>
-#include <utility> // std::piecewise_construct, std::forward_as_tuple
 #include <mutex> // std::lock_guard
 #include <chrono> // std::chrono::milliseconds
+#include <memory>
+#include <iostream>
 
+std::unique_ptr<ClipboardData> createClipboardData(int& argc, char* argv[])
+{
+    // For now, always use Qt
+    return std::make_unique<QtClipboardData>(argc, argv);
+}
+
+#if 0
 void onClipboardChanged()
 {
     using namespace FuseImplementation;
     std::lock_guard clipboardLock(clipboardDataMapMutex);
     const QClipboard* clipboard = QGuiApplication::clipboard();
     const QMimeData* mimeData = clipboard->mimeData();
-    qDebug() << "Clipboard changed";
     const QStringList formats = mimeData->formats();
     clipboardDataMap.clear();
     clipboardDataMap.reserve(formats.size());
@@ -38,13 +41,13 @@ void onClipboardChanged()
             clipboardMimeDirs.emplace(std::move(folder));
 
         }
-        qDebug() << "Format" << *it;
         QByteArray data = mimeData->data(format);
         clipboardDataMap.emplace(std::piecewise_construct,
                                  std::forward_as_tuple(format.toStdString()),
                                  std::forward_as_tuple(data.begin(), data.end()));
     }
 }
+#endif
 
 //int fuseMainThread(int argc, char* argv[], const fuse_operations* op, void* privateData = NULL)
 int fuseMainThread(int argc, char* argv[], const fuse_operations* op, void* privateData = nullptr)
@@ -60,28 +63,18 @@ int fuseMainThread(int argc, char* argv[], const fuse_operations* op, void* priv
     //int ret = fuse_main(args.argc, args.argv, &FuseImplementation::operations, NULL);
     int ret = fuse_main(args.argc, args.argv, op, privateData);
     fuse_opt_free_args(&args);
-    // Quit() is threadsafe, but exit() is not
-    QGuiApplication::quit();
+    if (privateData)
+    {
+        reinterpret_cast<FuseImplementation::FuseInitData*>(privateData)->clipboardData->quit();
+    }
     return ret;
 }
 
 int main(int argc, char* argv[])
 {
-    QGuiApplication app(argc, argv);
-
-    {
-        const QClipboard* clipboard = QGuiApplication::clipboard();
-        const QMimeData* mimeData = clipboard->mimeData();
-        qDebug() << (mimeData->hasImage() ? "Has image" : "No image");
-    }
-
-    //FuseImplementation::FuseInitData privateData{QGuiApplication::clipboard()};
-    auto future = std::async(fuseMainThread, argc, argv, &FuseImplementation::operations, nullptr);
-    const QClipboard* clipboard = QGuiApplication::clipboard();
-    QObject::connect(clipboard, &QClipboard::dataChanged, onClipboardChanged);
-
-    // Set initial clipboard data
-    onClipboardChanged();
+    std::unique_ptr<ClipboardData> clipboardData = createClipboardData(argc, argv);
+    FuseImplementation::FuseInitData privateData{clipboardData.get()};
+    auto future = std::async(fuseMainThread, argc, argv, &FuseImplementation::operations, &privateData);
 
     // Check early in case fuse exits early (for incorrect option or another reason)
     // If fuse exits very quickly and calls QGuiApplication::quit(), maybe before app.exec() runs, the program never exits (not sure what circumstnaces causes the issues)
@@ -91,7 +84,8 @@ int main(int argc, char* argv[])
     {
         return future.get();
     }
-    app.exec();
+
+    clipboardData->run();
 
     return future.get();
 }
