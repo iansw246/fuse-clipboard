@@ -40,7 +40,7 @@ target_link_libraries(fuse-clipboard
 )
 target_compile_options(fuse-clipboard PRIVATE "$<$<CONFIG:Debug>:-fsanitize=address>")
 
-#target_compile_options(fuse-clipboard PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_compile_options(fuse-clipboard PRIVATE -Wall -Wextra -Wpedantic)
 
 install(TARGETS fuse-clipboard
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})

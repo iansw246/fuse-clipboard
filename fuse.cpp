@@ -1,24 +1,13 @@
 #include "fuse.hpp"
 
-#include <QGuiApplication>
-#include <QClipboard>
-#include <QMimeData>
-#include <QString>
-#include <QStringList>
-#include <QImage>
-#include <QSize>
-#include <QBuffer>
-#include <QByteArray>
-#include <QDebug>
-
 #include <cstring>
-#include <errno.h>
 #include <array>
 #include <string_view>
 #include <mutex>
 #include <algorithm>
 #include <unordered_set>
 #include <unordered_map>
+#include <cassert>
 
 using namespace FuseImplementation;
 
@@ -34,8 +23,6 @@ struct FusePrivateData : FuseInitData
 
 // Should use std::string but it's not constexpr yet (as of C++17) and this is an unnecessary optimization I want to make
 constexpr std::string_view CLIPBOARD_BASE_PATH("/clipboard");
-constexpr std::string_view IMAGE_FILENAME("image");
-constexpr std::string_view CLIPBOARD_IMAGE_BASE_PATH("/clipboard/image.");
 // Basename of every file in FUSE filesystem, without extension.
 constexpr std::string_view BASE_FILE_NAME("file");
 
@@ -84,7 +71,6 @@ std::string filePathToFullMimeType(const std::string& filePath)
 
 void* init(fuse_conn_info* conn, fuse_config* config)
 {
-    qDebug() << "Private data pointer: " << fuse_get_context()->private_data << '\n';
     // Since init data is same as private data, no need to change anything
     return fuse_get_context()->private_data;
 }
@@ -229,4 +215,20 @@ int read(const char* path, char* buf, size_t size, off_t offset, fuse_file_info*
     return -ENOENT;
 }
 
-const fuse_operations FuseImplementation::operations = {.getattr = getAttr, .open = open, .read = read, .readdir = readDir, .init = init};
+constexpr fuse_operations makeFuseOperations()
+{
+    fuse_operations operations = {};
+    operations.getattr = getAttr;
+    operations.open = open;
+    operations.read = read;
+    operations.readdir = readDir;
+    operations.init = init;
+    // Make sure other fields are being value initialized to nullptr
+    assert(operations.bmap == nullptr);
+    assert(operations.fallocate == nullptr);
+    return operations;
+}
+
+// Should work in C++20
+//const fuse_operations FuseImplementation::operations = {.getattr = getAttr, .open = open, .read = read, .readdir = readDir, .init = init};
+const fuse_operations FuseImplementation::operations = makeFuseOperations();
