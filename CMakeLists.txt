@@ -32,9 +32,13 @@ target_compile_features(fuse-clipboard PUBLIC cxx_std_17)
 
 find_library(FUSE3 fuse3)
 target_include_directories(fuse-clipboard PRIVATE "/usr/include/fuse3")
+if(NOT FUSE3)
+  message(FATAL_ERROR "fuse3 library not found")
+endif()
 
 target_link_libraries(fuse-clipboard Qt${QT_VERSION_MAJOR}::Gui ${FUSE3})
 
+# Requried for fsanitize address compiler option
 target_link_libraries(fuse-clipboard
   "$<$<CONFIG:Debug>:-fsanitize=address>"
 )
@@ -44,3 +48,18 @@ target_compile_options(fuse-clipboard PRIVATE -Wall -Wextra -Wpedantic)
 
 install(TARGETS fuse-clipboard
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+#################
+# Google Test
+#################
+add_subdirectory(test/)
+
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  GIT_REPOSITORY https://github.com/google/googletest.git
+  GIT_TAG release-1.12.1
+)
+# For Windows: Prevent overriding the parent project's compiler/linker settings
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
