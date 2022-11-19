@@ -8,3 +8,13 @@ TEST(FuseTest, GetAttr_Root) {
   // Expect equality.
   EXPECT_EQ(7 * 6, 42);
 }
+
+TEST(FuseTest, fullMimeTypeToFileName) {
+    const std::string fileName = FuseImplementation::fullMimeTypeToFileName("text/plain");
+    EXPECT_EQ(fileName, "file.plain");
+}
+
+TEST(FuseTest, filePathToFullMimeType) {
+    const std::string fullMimeType = FuseImplementation::filePathToFullMimeType("image/file.png");
+    EXPECT_EQ(fullMimeType, "image/png");
+}

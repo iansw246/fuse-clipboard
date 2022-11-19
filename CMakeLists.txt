@@ -16,50 +16,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(QT NAMES Qt6 REQUIRED COMPONENTS Gui)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Gui)
 
-add_executable(fuse-clipboard
-  main.cpp
-  fuse.hpp
-  fuse.cpp
-  clipboardData.hpp
-  qtClipboardData.hpp
-  qtClipboardData.cpp
-  qtClipboardDataBase.hpp
-  qtClipboardDataBase.cpp
-)
-
-# C++ 17
-target_compile_features(fuse-clipboard PUBLIC cxx_std_17)
-
-find_library(FUSE3 fuse3)
-target_include_directories(fuse-clipboard PRIVATE "/usr/include/fuse3")
-if(NOT FUSE3)
-  message(FATAL_ERROR "fuse3 library not found")
-endif()
-
-target_link_libraries(fuse-clipboard Qt${QT_VERSION_MAJOR}::Gui ${FUSE3})
-
-# Requried for fsanitize address compiler option
-target_link_libraries(fuse-clipboard
-  "$<$<CONFIG:Debug>:-fsanitize=address>"
-)
-target_compile_options(fuse-clipboard PRIVATE "$<$<CONFIG:Debug>:-fsanitize=address>")
-
-target_compile_options(fuse-clipboard PRIVATE -Wall -Wextra -Wpedantic)
-
-install(TARGETS fuse-clipboard
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+add_subdirectory(lib/)
+add_subdirectory(src/)
 
 #################
 # Google Test
 #################
 add_subdirectory(test/)
-
-include(FetchContent)
-FetchContent_Declare(
-  googletest
-  GIT_REPOSITORY https://github.com/google/googletest.git
-  GIT_TAG release-1.12.1
-)
-# For Windows: Prevent overriding the parent project's compiler/linker settings
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)

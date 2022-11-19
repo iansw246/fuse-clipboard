@@ -41,7 +41,7 @@ ClipboardData* getClipboardData()
 
 // Removes leading part of mime type, returns name of file as {BASE_FILE_NAME}.{mimetype}
 // If mimetype is "image/png" and BASE_FILE_NAME="file", file name returned is "file.png"
-std::string fullMimeTypeToFileName(const std::string& mimeType)
+std::string FuseImplementation::fullMimeTypeToFileName(const std::string& mimeType)
 {
     auto slashIndex = mimeType.find('/');
     // Maybe reserve space to increase performance
@@ -51,7 +51,7 @@ std::string fullMimeTypeToFileName(const std::string& mimeType)
 
 // Given file path in form of "{mimetype prefix}/{name}.{mimetype}", returns full mimetype, {mimetype prefix}/{mimetype}
 // For example, if base file name is "basefile", then "image/basefile.png" returns "image/png"
-std::string filePathToFullMimeType(const std::string& filePath)
+std::string FuseImplementation::filePathToFullMimeType(const std::string& filePath)
 {
     auto baseFileNameIndex = filePath.find(BASE_FILE_NAME.data());
     if (baseFileNameIndex == std::string::npos)
